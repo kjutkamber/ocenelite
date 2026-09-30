@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ocene (lite)</title>
+<style>
+*{-webkit-box-sizing:border-box;box-sizing:border-box}
+body{margin:0;font-family:-apple-system,Helvetica,Arial,sans-serif;background:#e2e8f0;color:#1e293b;font-size:16px}
+.bar{background:#0f172a;color:#fff;padding:12px 16px;overflow:hidden}
+.bar b{color:#34d399}
+.bar button{float:right;background:#e11d48;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-size:14px}
+.wrap{max-width:820px;margin:0 auto;padding:12px}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;border:1px solid #cbd5e1}
+input[type=text]{width:100%;padding:12px;font-size:16px;border:1px solid #94a3b8;border-radius:8px;margin:4px 0 12px}
+.btn{width:100%;padding:13px;font-size:16px;font-weight:bold;color:#fff;background:#059669;border:0;border-radius:8px}
+.err{color:#be123c;font-weight:bold;margin-top:10px}
+.stats{display:table;width:100%;table-layout:fixed}
+.stat{display:table-cell;text-align:center;padding:4px}
+.stat .v{font-size:26px;font-weight:bold;color:#059669}
+.stat .l{font-size:11px;color:#64748b;text-transform:uppercase}
+.sem{background:#f1f5f9;padding:10px 14px;font-weight:bold;margin:-14px -14px 6px;border-radius:12px 12px 0 0}
+.row{display:table;width:100%;border-bottom:1px solid #e2e8f0;padding:8px 0}
+.row>div{display:table-cell;vertical-align:middle}
+.row .e{width:50px;text-align:center;color:#64748b;font-size:13px}
+.row .g{width:110px;text-align:right}
+select{font-size:16px;padding:6px;border-radius:6px;border:1px solid #94a3b8;background:#fff}
+.ok{color:#059669}
+#msg{position:fixed;left:0;right:0;bottom:0;background:#0f172a;color:#fff;text-align:center;padding:10px;font-size:14px;display:none}
+</style>
+</head>
+<body>
+<div id="login" class="wrap">
+  <div class="card">
+    <h2 style="margin-top:0">Studentski portal (lite)</h2>
+    <label>Ime i prezime</label><input type="text" id="ln" autocapitalize="none" autocorrect="off">
+    <label>Broj indeksa</label><input type="text" id="li" autocapitalize="none" autocorrect="off">
+    <button class="btn" onclick="doLogin()">Prijavi se</button>
+    <div class="err" id="lerr"></div>
+  </div>
+</div>
+<div id="app" style="display:none">
+  <div class="bar"><button onclick="doLogout()">Odjava</button><span id="who"></span></div>
+  <div class="wrap">
+    <div class="card"><div class="stats">
+      <div class="stat"><div class="v" id="s-avg">0.00</div><div class="l">Prosek</div></div>
+      <div class="stat"><div class="v" id="s-espb">0</div><div class="l">ESPB / 240</div></div>
+      <div class="stat"><div class="v" id="s-pass">0</div><div class="l">Položeno</div></div>
+    </div></div>
+    <div id="list"></div>
+  </div>
+</div>
+<div id="msg"></div>
+<script>
+var SB_URL = 'https://nhffxmmmwoonnkhvrqev.supabase.co';
+var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oZmZ4bW1td29vbm5raHZycWV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzEzNDcsImV4cCI6MjA5NDk0NzM0N30.FG2gdhNRXJxRnPVKdQ8qLGlwcaJ4nSUpKJJrfq4YsDc';
+var user = null, subjects = [];
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function api(method, path, body, cb){
+  var x = new XMLHttpRequest();
+  x.open(method, SB_URL + '/rest/v1/' + path, true);
+  x.setRequestHeader('apikey', SB_KEY);
+  x.setRequestHeader('Authorization', 'Bearer ' + SB_KEY);
+  x.setRequestHeader('Content-Type', 'application/json');
+  if (method !== 'GET') x.setRequestHeader('Prefer', 'return=minimal');
+  x.onreadystatechange = function(){
+    if (x.readyState !== 4) return;
+    var ok = x.status >= 200 && x.status < 300, d = null;
+    try { d = x.responseText ? JSON.parse(x.responseText) : null; } catch (e) {}
+    cb(ok, d);
+  };
+  x.send(body ? JSON.stringify(body) : null);
+}
+
+var msgTimer = null;
+function toast(t){
+  var m = $('msg'); m.textContent = t; m.style.display = 'block';
+  clearTimeout(msgTimer);
+  msgTimer = setTimeout(function(){ m.style.display = 'none'; }, 2500);
+}
+
+function doLogin(){
+  var name = $('ln').value.replace(/^\s+|\s+$/g,'');
+  var idx = $('li').value.replace(/^\s+|\s+$/g,'');
+  var err = $('lerr'); err.textContent = '';
+  if (!name || !idx){ err.textContent = 'Unesi ime i broj indeksa.'; return; }
+  var key = name.toLowerCase();
+  api('GET', 'users?select=key,display_name,index_number,accepted_terms&key=eq.' + encodeURIComponent(key), null, function(ok, d){
+    if (!ok){ err.textContent = 'Greška u vezi sa serverom.'; return; }
+    if (!d || !d.length || d[0].index_number !== idx){ err.textContent = 'Nevažeća kombinacija imena i indeksa.'; return; }
+    if (!d[0].accepted_terms){ err.textContent = 'Prvo se prijavi na glavnu aplikaciju i prihvati uslove korišćenja.'; return; }
+    user = { key: d[0].key, name: d[0].display_name, index: idx };
+    try { localStorage.setItem('liteSession', JSON.stringify({ n: name, i: idx })); } catch (e) {}
+    loadSubjects();
+  });
+}
+
+function doLogout(){
+  try { localStorage.removeItem('liteSession'); } catch (e) {}
+  user = null; subjects = [];
+  $('app').style.display = 'none'; $('login').style.display = 'block';
+}
+
+function loadSubjects(){
+  toast('Učitavanje...');
+  api('GET', 'student_subjects?select=subject_id,name,grade,espb,semester&order=semester.asc&user_key=eq.' + encodeURIComponent(user.key), null, function(ok, d){
+    if (!ok){ toast('Greška pri učitavanju.'); return; }
+    subjects = [];
+    for (var i = 0; i < d.length; i++){
+      subjects.push({ id: d[i].subject_id, name: d[i].name, espb: d[i].espb, semester: d[i].semester,
+        grade: d[i].grade === 1 ? 'p' : (d[i].grade == null ? '' : d[i].grade) });
+    }
+    $('login').style.display = 'none'; $('app').style.display = 'block';
+    $('who').innerHTML = '<b>' + esc(user.name) + '</b> (' + esc(user.index) + ')';
+    render();
+  });
+}
+
+function passed(g){ return g === 'p' || (typeof g === 'number' && g >= 6); }
+
+function stats(){
+  var sum = 0, n = 0, espb = 0, p = 0;
+  for (var i = 0; i < subjects.length; i++){
+    var s = subjects[i];
+    if (typeof s.grade === 'number' && s.grade >= 6){ sum += s.grade; n++; }
+    if (passed(s.grade)){ espb += s.espb; p++; }
+  }
+  $('s-avg').textContent = n ? (sum / n).toFixed(2) : '0.00';
+  $('s-espb').textContent = espb;
+  $('s-pass').textContent = p + '/' + subjects.length;
+}
+
+function render(){
+  var html = '';
+  for (var sem = 1; sem <= 8; sem++){
+    var rows = '', cnt = 0;
+    for (var i = 0; i < subjects.length; i++){
+      var s = subjects[i];
+      if (s.semester !== sem) continue;
+      cnt++;
+      var opts = '<option value="">—</option>';
+      for (var g = 6; g <= 10; g++) opts += '<option value="' + g + '"' + (s.grade === g ? ' selected' : '') + '>' + g + '</option>';
+      opts += '<option value="p"' + (s.grade === 'p' ? ' selected' : '') + '>Položen</option>';
+      rows += '<div class="row"><div>' + (passed(s.grade) ? '<span class="ok">✓</span> ' : '') + esc(s.name) +
+        '</div><div class="e">' + s.espb + ' ESPB</div><div class="g"><select onchange="setGrade(' + i + ',this.value)">' + opts + '</select></div></div>';
+    }
+    if (cnt) html += '<div class="card"><div class="sem">' + sem + '. semestar</div>' + rows + '</div>';
+  }
+  $('list').innerHTML = html || '<div class="card">Nema predmeta.</div>';
+  stats();
+}
+
+function setGrade(i, v){
+  var s = subjects[i], old = s.grade;
+  s.grade = v === '' ? '' : (v === 'p' ? 'p' : parseInt(v, 10));
+  var dbGrade = s.grade === '' ? null : (s.grade === 'p' ? 1 : s.grade);
+  stats();
+  toast('Čuvanje...');
+  api('PATCH', 'student_subjects?user_key=eq.' + encodeURIComponent(user.key) + '&subject_id=eq.' + encodeURIComponent(s.id),
+    { grade: dbGrade, updated_at: new Date().toISOString() }, function(ok){
+      if (ok){ toast('Sačuvano ✓'); render(); }
+      else { s.grade = old; toast('Greška pri čuvanju!'); render(); }
+    });
+}
+
+(function(){
+  try {
+    var sv = JSON.parse(localStorage.getItem('liteSession') || 'null');
+    if (sv && sv.n && sv.i){ $('ln').value = sv.n; $('li').value = sv.i; doLogin(); }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
