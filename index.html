@@ -85,6 +85,11 @@ h3{margin:0 0 10px}
 .srow>div{display:table-cell;vertical-align:middle}
 .srow .b{width:150px;text-align:right}
 .srow button{padding:8px 12px;font-size:14px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;margin-left:4px}
+.abswarn{color:#e11d48;font-weight:bold}
+.at{margin-top:4px;white-space:nowrap}
+.ab{width:46%;padding:3px 0;font-size:13px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;margin-right:2%;color:#64748b}
+.ab.pon{background:#059669;border-color:#059669;color:#fff}
+.ab.aon{background:#e11d48;border-color:#e11d48;color:#fff}
 </style>
 </head>
 <body>
@@ -165,13 +170,13 @@ function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function pad(n){ return (n < 10 ? '0' : '') + n; }
 
-function api(method, path, body, cb){
+function api(method, path, body, cb, prefer){
   var x = new XMLHttpRequest();
   x.open(method, SB_URL + '/rest/v1/' + path, true);
   x.setRequestHeader('apikey', SB_KEY);
   x.setRequestHeader('Authorization', 'Bearer ' + SB_KEY);
   x.setRequestHeader('Content-Type', 'application/json');
-  if (method !== 'GET') x.setRequestHeader('Prefer', 'return=minimal');
+  if (method !== 'GET') x.setRequestHeader('Prefer', prefer || 'return=minimal');
   x.onreadystatechange = function(){
     if (x.readyState !== 4) return;
     var ok = x.status >= 200 && x.status < 300, d = null;
@@ -207,26 +212,28 @@ function doLogin(){
 
 function doLogout(){
   try { localStorage.removeItem('liteSession'); } catch (e) {}
-  user = null; subjects = [];
+  user = null; subjects = []; allSlots = []; att = {};
   $('menu').className = ''; $('ov').style.display = 'none';
   $('app').style.display = 'none'; $('login').style.display = 'block';
 }
 
 function loadSubjects(){
   toast('U\u010ditavanje...');
-  api('GET', 'student_subjects?select=subject_id,name,grade,espb,semester,todos&order=semester.asc&user_key=eq.' + encodeURIComponent(user.key), null, function(ok, d){
+  api('GET', 'student_subjects?select=subject_id,name,grade,espb,semester,todos,absence_limit&order=semester.asc&user_key=eq.' + encodeURIComponent(user.key), null, function(ok, d){
     if (!ok){ toast('Gre\u0161ka pri u\u010ditavanju.'); return; }
     subjects = [];
     for (var i = 0; i < d.length; i++){
-      subjects.push({ id: d[i].subject_id, name: d[i].name, espb: d[i].espb, semester: d[i].semester,
+      subjects.push({ id: d[i].subject_id, name: d[i].name, espb: d[i].espb, semester: d[i].semester, limit: d[i].absence_limit || 3,
         grade: d[i].grade === 1 ? 'p' : (d[i].grade == null ? '' : d[i].grade),
         todos: (d[i].todos && d[i].todos.length !== undefined) ? d[i].todos : [] });
     }
+    loadSchedData(function(){
     $('login').style.display = 'none'; $('app').style.display = 'block';
     $('who').innerHTML = '<b>' + esc(user.name) + '</b> (' + esc(user.index) + ')';
     $('mi-uslovi').style.display = user.showStatus ? 'block' : 'none';
-    schedYear = 0; schedTab = 'view'; editId = null;
+    schedYear = 0; schedTab = 'view'; editId = null; schedWeek = 0;
     show('grades');
+    });
   });
 }
 
@@ -279,7 +286,7 @@ function render(){
       var opts = '<option value="">\u2014</option>';
       for (var g = 6; g <= 10; g++) opts += '<option value="' + g + '"' + (s.grade === g ? ' selected' : '') + '>' + g + '</option>';
       opts += '<option value="p"' + (s.grade === 'p' ? ' selected' : '') + '>Polo\u017een</option>';
-      rows += '<div class="row"><div>' + (passed(s.grade) ? '<span class="ok">\u2713</span> ' : '') + esc(s.name) +
+      rows += '<div class="row"><div>' + (passed(s.grade) ? '<span class="ok">\u2713</span> ' : '') + nameHtml(s.id, s.name) +
         '</div><div class="e">' + s.espb + ' ESPB</div><div class="g"><select onchange="setGrade(' + i + ',this.value)">' + opts + '</select></div></div>';
     }
     if (cnt) html += '<div class="card"><div class="sem">' + sem + '. semestar</div>' + rows + '</div>';
@@ -358,7 +365,7 @@ function renderTasks(){
   for (var j = 0; j < all.length; j++){
     var t = all[j];
     h += '<div class="trow' + (t.done ? ' tdone' : '') + '"><div class="c"><input type="checkbox"' + (t.done ? ' checked' : '') +
-      ' onchange="toggleTask(' + t.si + ',' + t.ti + ')"></div><div><div class="t">' + esc(t.text) + '</div><div class="tsub">' + esc(t.sname) +
+      ' onchange="toggleTask(' + t.si + ',' + t.ti + ')"></div><div><div class="t">' + esc(t.text) + '</div><div class="tsub">' + nameHtml(subjects[t.si].id, t.sname) +
       '</div></div><div class="d' + (isLate(t.due, t.done) ? ' late' : '') + '">' + (t.due ? 'do ' + fmtDue(t.due) : '') +
       '</div><div class="x"><button onclick="delTask(' + t.si + ',' + t.ti + ')">\u2715</button></div></div>';
   }
@@ -449,27 +456,55 @@ function renderUslovi(){
   $('ubody').innerHTML = h;
 }
 
-/* ---------- RASPORED ---------- */
-var DAYS = ['Pon','Uto','Sre','\u010cet','Pet','Sub'];
-var DAYS_FULL = ['Ponedeljak','Utorak','Sreda','\u010cetvrtak','Petak','Subota'];
+/* ---------- RASPORED + PRISUSTVO ---------- */
+var DAYS = ['Pon','Uto','Sre','Čet','Pet','Sub'];
+var DAYS_FULL = ['Ponedeljak','Utorak','Sreda','Četvrtak','Petak','Subota'];
 var COLORS = ['#059669','#6366f1','#f59e0b','#e11d48','#0ea5e9','#a855f7','#14b8a6','#ea580c'];
-var schedYear = 0, schedTab = 'view', editId = null, sched = null;
+var DEFAULT_LIMIT = 3;   // dozvoljen broj izostanaka (menja se po predmetu u tabu "Prisustvo")
+var WARN_BEFORE = 1;     // crveno ime kad je do limita ostalo ovoliko izostanaka ili manje
+var schedYear = 0, schedTab = 'view', editId = null, schedWeek = 0, allSlots = [], att = {};
 
-function schedKey(){ return 'lsched_' + user.key; }
-function loadSched(){
-  if (sched) return sched;
-  sched = {};
-  try { sched = JSON.parse(localStorage.getItem(schedKey()) || '{}') || {}; } catch (e) { sched = {}; }
-  return sched;
+function enc(s){ return encodeURIComponent(s); }
+function newSlotId(i){ return 's' + new Date().getTime() + Math.floor(Math.random() * 100000) + i; }
+
+/* ucitavanje rasporeda i prisustva sa Supabase */
+function loadSchedData(cb){
+  allSlots = []; att = {};
+  var k = enc(user.key);
+  api('GET', 'schedule_slots?select=*&user_key=eq.' + k, null, function(ok, d){
+    if (ok && d){
+      for (var i = 0; i < d.length; i++){
+        allSlots.push({ id: d[i].id, sid: d[i].subject_id, name: d[i].subject_name, year: d[i].year, day: d[i].day,
+          start: d[i].start_time, end: d[i].end_time, note: d[i].note || '' });
+      }
+    } else toast('Greška pri učitavanju rasporeda.');
+    api('GET', 'attendance?select=slot_id,subject_id,lesson_date,status&user_key=eq.' + k, null, function(ok2, a){
+      if (ok2 && a){
+        for (var j = 0; j < a.length; j++) att[a[j].slot_id + '|' + a[j].lesson_date] = { sid: a[j].subject_id, status: a[j].status };
+      }
+      cb();
+    });
+  });
 }
-function saveSched(){
-  try { localStorage.setItem(schedKey(), JSON.stringify(sched)); return true; }
-  catch (e) { toast('Ne mogu da sa\u010duvam raspored (privatni re\u017eim?).'); return false; }
+
+/* pomocne funkcije za izostanke */
+function subjById(sid){
+  for (var i = 0; i < subjects.length; i++) if (subjects[i].id === sid) return subjects[i];
+  return null;
 }
+function attCount(sid, status){
+  var n = 0, k;
+  for (k in att) if (att.hasOwnProperty(k) && att[k].sid === sid && att[k].status === status) n++;
+  return n;
+}
+function limitOf(sid){ var s = subjById(sid); return (s && s.limit) || DEFAULT_LIMIT; }
+function isWarn(sid){ return attCount(sid, 'absent') >= limitOf(sid) - WARN_BEFORE; }
+function nameHtml(sid, name){ return isWarn(sid) ? '<span class="abswarn">' + esc(name) + '</span>' : esc(name); }
+
 function yearSlots(){
-  loadSched();
-  if (!sched['y' + schedYear]) sched['y' + schedYear] = [];
-  return sched['y' + schedYear];
+  var out = [];
+  for (var i = 0; i < allSlots.length; i++) if (allSlots[i].year === schedYear) out.push(allSlots[i]);
+  return out;
 }
 function yearSubjects(){
   var out = [];
@@ -480,8 +515,8 @@ function yearSubjects(){
   return out;
 }
 function subjName(sl){
-  for (var i = 0; i < subjects.length; i++) if (subjects[i].id === sl.sid) return subjects[i].name;
-  return sl.name || '?';
+  var s = subjById(sl.sid);
+  return s ? s.name : (sl.name || '?');
 }
 function colorFor(sid){
   var n = 0;
@@ -496,16 +531,26 @@ function normTime(t){
   return pad(h) + ':' + pad(mi);
 }
 function findSlot(id){
-  var a = yearSlots();
-  for (var i = 0; i < a.length; i++) if (a[i].id === id) return a[i];
+  for (var i = 0; i < allSlots.length; i++) if (allSlots[i].id === id) return allSlots[i];
   return null;
 }
 
+/* nedelje i datumi */
+function dstr(d){ return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function weekStart(){
+  var d = new Date(); d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + schedWeek * 7);
+  return d;
+}
+function dayDate(i){ var d = weekStart(); d.setDate(d.getDate() + i); return d; }
+function fmtShort(d){ return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.'; }
+function shiftWeek(n){ schedWeek += n; renderSched(); }
+function thisWeek(){ schedWeek = 0; renderSched(); }
+
 function setSchedYear(y){ schedYear = y; editId = null; renderSched(); }
-function setSchedTab(t){ schedTab = t; if (t === 'view') editId = null; renderSched(); }
+function setSchedTab(t){ schedTab = t; if (t !== 'edit') editId = null; renderSched(); }
 
 function renderSched(){
-  loadSched();
   if (!schedYear){
     var mx = 0;
     for (var i = 0; i < subjects.length; i++) if (subjects[i].grade !== '' && subjects[i].semester > mx) mx = subjects[i].semester;
@@ -515,8 +560,11 @@ function renderSched(){
   for (var y = 1; y <= 4; y++) yh += '<button class="yr' + (y === schedYear ? ' on' : '') + '" onclick="setSchedYear(' + y + ')">' + y + '. godina</button>';
   $('s-years').innerHTML = yh;
   $('s-tabs').innerHTML = '<button class="tab' + (schedTab === 'view' ? ' on' : '') + '" onclick="setSchedTab(\'view\')">Pregled</button>' +
+    '<button class="tab' + (schedTab === 'stats' ? ' on' : '') + '" onclick="setSchedTab(\'stats\')">Prisustvo</button>' +
     '<button class="tab' + (schedTab === 'edit' ? ' on' : '') + '" onclick="setSchedTab(\'edit\')">Napravi / uredi</button>';
-  if (schedTab === 'view') renderSchedView(); else renderSchedEdit();
+  if (schedTab === 'view') renderSchedView();
+  else if (schedTab === 'stats') renderSchedStats();
+  else renderSchedEdit();
 }
 
 function sortSlots(a){
@@ -525,16 +573,20 @@ function sortSlots(a){
 
 function renderSchedView(){
   var slots = yearSlots();
+  var nav = '<div style="margin-bottom:10px"><button class="btn2" onclick="shiftWeek(-1)">‹</button> ' +
+    '<b style="display:inline-block;min-width:150px;text-align:center">' + fmtShort(dayDate(0)) + ' – ' + fmtShort(dayDate(5)) + dayDate(5).getFullYear() + '.</b> ' +
+    '<button class="btn2" onclick="shiftWeek(1)">›</button> ' +
+    (schedWeek !== 0 ? '<button class="btn2" onclick="thisWeek()">Danas</button>' : '') + '</div>';
   if (!slots.length){
-    $('s-body').innerHTML = '<p style="color:#64748b">Raspored za ' + schedYear + '. godinu je prazan. Otvori "Napravi / uredi" da dodas predmete.</p>';
+    $('s-body').innerHTML = '<p style="color:#64748b">Raspored za ' + schedYear + '. godinu je prazan. Otvori "Napravi / uredi" da dodaš predmete.</p>';
     return;
   }
-  var h = '<table class="wk"><tr>';
-  var d, i;
-  for (d = 0; d < 6; d++) h += '<th>' + DAYS[d] + '</th>';
+  var h = nav + '<table class="wk"><tr>';
+  var d, i, today = todayStr();
+  for (d = 0; d < 6; d++) h += '<th' + (dstr(dayDate(d)) === today ? ' style="background:#059669"' : '') + '>' + DAYS[d] + '<br><span style="font-weight:normal;font-size:10px">' + fmtShort(dayDate(d)) + '</span></th>';
   h += '</tr><tr>';
   for (d = 0; d < 6; d++){
-    var list = [];
+    var list = [], date = dstr(dayDate(d));
     for (i = 0; i < slots.length; i++) if (slots[i].day === d) list.push(slots[i]);
     sortSlots(list);
     var maxEnd = '', cell = '';
@@ -542,18 +594,76 @@ function renderSchedView(){
       var sl = list[i];
       var conflict = maxEnd !== '' && sl.start < maxEnd;
       if (sl.end > maxEnd) maxEnd = sl.end;
-      cell += '<div class="sl" style="border-left-color:' + colorFor(sl.sid) + '"><div class="tm">' + sl.start + '\u2013' + sl.end +
-        (conflict ? ' <span class="cf">\u26a0</span>' : '') + '</div><div>' + esc(subjName(sl)) + '</div>' +
-        (sl.note ? '<div class="nt">' + esc(sl.note) + '</div>' : '') + '</div>';
+      var cur = att[sl.id + '|' + date], st = cur ? cur.status : '';
+      cell += '<div class="sl" style="border-left-color:' + colorFor(sl.sid) + '"><div class="tm">' + sl.start + '–' + sl.end +
+        (conflict ? ' <span class="cf">⚠</span>' : '') + '</div><div>' + nameHtml(sl.sid, subjName(sl)) + '</div>' +
+        (sl.note ? '<div class="nt">' + esc(sl.note) + '</div>' : '') +
+        '<div class="at"><button class="ab' + (st === 'present' ? ' pon' : '') + '" onclick="markAtt(\'' + sl.id + '\',\'' + date + '\',\'present\')">✓</button>' +
+        '<button class="ab' + (st === 'absent' ? ' aon' : '') + '" onclick="markAtt(\'' + sl.id + '\',\'' + date + '\',\'absent\')">✗</button></div></div>';
     }
     h += '<td>' + cell + '</td>';
   }
-  h += '</tr></table><p style="font-size:12px;color:#64748b">\u26a0 = preklapa se sa drugim terminom istog dana.</p>';
+  h += '</tr></table><p style="font-size:12px;color:#64748b">✓ = bio/la sam, ✗ = izostao/la sam (klik ponovo poništava). ⚠ = preklapa se sa drugim terminom istog dana. Crveno ime = blizu limita izostanaka.</p>';
   $('s-body').innerHTML = h;
 }
 
+/* oznacavanje prisustva */
+function markAtt(slotId, date, status){
+  var sl = findSlot(slotId);
+  if (!sl) return;
+  if (date > todayStr()){ toast('Ne možeš označiti budući termin.'); return; }
+  var key = slotId + '|' + date, cur = att[key], k = enc(user.key);
+  if (cur && cur.status === status){
+    delete att[key]; renderSched();
+    api('DELETE', 'attendance?user_key=eq.' + k + '&slot_id=eq.' + enc(slotId) + '&lesson_date=eq.' + date, null, function(ok){
+      if (!ok){ att[key] = cur; toast('Greška pri čuvanju!'); renderSched(); }
+      else toast('Poništeno');
+    });
+    return;
+  }
+  att[key] = { sid: sl.sid, status: status }; renderSched();
+  api('POST', 'attendance?on_conflict=user_key,slot_id,lesson_date',
+    { user_key: user.key, slot_id: slotId, subject_id: sl.sid, lesson_date: date, status: status, updated_at: new Date().toISOString() },
+    function(ok){
+      if (!ok){ if (cur) att[key] = cur; else delete att[key]; toast('Greška pri čuvanju!'); renderSched(); }
+      else toast('Sačuvano ✓');
+    }, 'resolution=merge-duplicates,return=minimal');
+}
+
+/* statistika prisustva po predmetu */
+function renderSchedStats(){
+  var h = '', any = false, i, j;
+  for (i = 0; i < subjects.length; i++){
+    var s = subjects[i];
+    if (Math.ceil(s.semester / 2) !== schedYear) continue;
+    var hasSlot = false;
+    for (j = 0; j < allSlots.length; j++) if (allSlots[j].sid === s.id) hasSlot = true;
+    var ab = attCount(s.id, 'absent'), pr = attCount(s.id, 'present');
+    if (!hasSlot && !ab && !pr) continue;
+    any = true;
+    var lim = limitOf(s.id), opts = '';
+    for (j = 2; j <= 8; j++) opts += '<option value="' + j + '"' + (j === lim ? ' selected' : '') + '>' + j + '</option>';
+    h += '<div class="srow"><div><b>' + nameHtml(s.id, s.name) + '</b><div class="us">Bio/la: ' + pr + ' · Izostanci: <b' + (isWarn(s.id) ? ' class="abswarn"' : '') + '>' + ab + ' / ' + lim + '</b>' +
+      (ab > lim ? ' · prekoračen limit!' : '') + '</div></div><div class="b"><span class="lbl">limit</span> <select onchange="setLimit(\'' + s.id + '\',this.value)">' + opts + '</select></div></div>';
+  }
+  $('s-body').innerHTML = any
+    ? '<p class="us" style="margin-bottom:6px">Izostanci se broje iz rasporeda (tab Pregled). Limit možeš da promeniš po predmetu.</p>' + h
+    : '<p style="color:#64748b">Nema predmeta sa terminima za ' + schedYear + '. godinu. Dodaj termine u "Napravi / uredi".</p>';
+}
+
+function setLimit(sid, v){
+  var s = subjById(sid); if (!s) return;
+  var old = s.limit, n = parseInt(v, 10);
+  s.limit = n; renderSched();
+  api('PATCH', 'student_subjects?user_key=eq.' + enc(user.key) + '&subject_id=eq.' + enc(sid),
+    { absence_limit: n, updated_at: new Date().toISOString() }, function(ok){
+      if (ok) toast('Sačuvano ✓');
+      else { s.limit = old; toast('Greška pri čuvanju!'); renderSched(); }
+    });
+}
+
 function renderSchedEdit(){
-  var subs = yearSubjects(), slots = yearSlots().slice(), h = '', i;
+  var subs = yearSubjects(), slots = yearSlots(), h = '', i;
   if (!subs.length){
     $('s-body').innerHTML = '<p style="color:#64748b">Nema predmeta za ' + schedYear + '. godinu.</p>';
     return;
@@ -562,26 +672,27 @@ function renderSchedEdit(){
   h += '<div style="border:2px solid ' + (ed ? '#f59e0b' : '#e2e8f0') + ';border-radius:10px;padding:12px;margin-bottom:14px">';
   h += '<h3>' + (ed ? 'Izmena termina' : 'Novi termin') + '</h3>';
   h += '<span class="lbl">Predmet</span><br><select id="f-sub" style="width:100%;margin:4px 0 12px">';
-  for (i = 0; i < subs.length; i++) h += '<option value="' + esc(subs[i].id) + '">S' + subs[i].semester + ' \u2014 ' + esc(subs[i].name) + '</option>';
+  for (i = 0; i < subs.length; i++) h += '<option value="' + esc(subs[i].id) + '">S' + subs[i].semester + ' — ' + esc(subs[i].name) + '</option>';
   h += '</select>';
-  h += '<span class="lbl">Dan' + (ed ? '' : ' (mo\u017ee\u0161 vi\u0161e)') + '</span><div class="days" style="margin-top:6px">';
+  h += '<span class="lbl">Dan' + (ed ? '' : ' (možeš više)') + '</span><div class="days" style="margin-top:6px">';
   for (i = 0; i < 6; i++) h += '<label><input type="checkbox" name="sd" value="' + i + '">' + DAYS_FULL[i] + '</label>';
   h += '</div>';
   h += '<div class="half"><span class="lbl">Od</span><input type="time" id="f-start" placeholder="08:00"></div>';
   h += '<div class="half"><span class="lbl">Do</span><input type="time" id="f-end" placeholder="09:30"></div>';
   h += '<span class="lbl">Beleska / sala</span><input type="text" id="f-note" placeholder="npr. sala 12, vezbe">';
-  h += '<button class="btn" onclick="saveSlot()">' + (ed ? 'Sa\u010duvaj izmenu' : 'Dodaj u raspored') + '</button>';
-  if (ed) h += '<div style="margin-top:8px"><button class="btn2" onclick="cancelEdit()">Otka\u017ei izmenu</button></div>';
+  h += '<button class="btn" onclick="saveSlot()">' + (ed ? 'Sačuvaj izmenu' : 'Dodaj u raspored') + '</button>';
+  if (ed) h += '<div style="margin-top:8px"><button class="btn2" onclick="cancelEdit()">Otkaži izmenu</button></div>';
   h += '</div>';
 
   h += '<h3>Termini (' + slots.length + ')</h3>';
-  if (!slots.length) h += '<p style="color:#94a3b8">Jo\u0161 nema termina.</p>';
+  if (!slots.length) h += '<p style="color:#94a3b8">Još nema termina.</p>';
+  slots = slots.slice();
   slots.sort(function(a, b){ return a.day - b.day || (a.start < b.start ? -1 : 1); });
   for (i = 0; i < slots.length; i++){
     var sl = slots[i];
-    h += '<div class="srow"><div><b>' + esc(subjName(sl)) + '</b><div class="us">' + DAYS_FULL[sl.day] + ' ' + sl.start + '\u2013' + sl.end +
-      (sl.note ? ' \u00b7 ' + esc(sl.note) : '') + '</div></div><div class="b"><button onclick="startEdit(\'' + sl.id + '\')">Uredi</button>' +
-      '<button onclick="delSlot(\'' + sl.id + '\')">\u2715</button></div></div>';
+    h += '<div class="srow"><div><b>' + esc(subjName(sl)) + '</b><div class="us">' + DAYS_FULL[sl.day] + ' ' + sl.start + '–' + sl.end +
+      (sl.note ? ' · ' + esc(sl.note) : '') + '</div></div><div class="b"><button onclick="startEdit(\'' + sl.id + '\')">Uredi</button>' +
+      '<button onclick="delSlot(\'' + sl.id + '\')">✕</button></div></div>';
   }
   $('s-body').innerHTML = h;
 
@@ -593,7 +704,7 @@ function renderSchedEdit(){
   }
 }
 
-function startEdit(id){ editId = id; renderSched(); window.scrollTo(0, 0); }
+function startEdit(id){ editId = id; schedTab = 'edit'; renderSched(); window.scrollTo(0, 0); }
 function cancelEdit(){ editId = null; renderSched(); }
 
 function saveSlot(){
@@ -604,29 +715,54 @@ function saveSlot(){
   for (i = 0; i < cbs.length; i++) if (cbs[i].checked) days.push(parseInt(cbs[i].value, 10));
   if (!days.length){ toast('Izaberi bar jedan dan.'); return; }
   if (!st || !en){ toast('Unesi vreme (npr. 08:00).'); return; }
-  if (en <= st){ toast('Kraj mora biti posle po\u010detka.'); return; }
-  var slots = yearSlots(), sname = '';
+  if (en <= st){ toast('Kraj mora biti posle početka.'); return; }
+  var sname = '';
   for (i = 0; i < subjects.length; i++) if (subjects[i].id === sid) sname = subjects[i].name;
-  var ed = editId ? findSlot(editId) : null;
+  var ed = editId ? findSlot(editId) : null, newRows = [], edPatch = null;
   for (i = 0; i < days.length; i++){
     if (ed && i === 0){
-      ed.sid = sid; ed.name = sname; ed.day = days[0]; ed.start = st; ed.end = en; ed.note = note;
+      edPatch = { subject_id: sid, subject_name: sname, day: days[0], start_time: st, end_time: en, note: note };
     } else {
-      slots.push({ id: 's' + new Date().getTime() + Math.floor(Math.random() * 10000) + i, sid: sid, name: sname, day: days[i], start: st, end: en, note: note });
+      newRows.push({ id: newSlotId(i), user_key: user.key, subject_id: sid, subject_name: sname, year: schedYear,
+        day: days[i], start_time: st, end_time: en, note: note });
     }
   }
-  editId = null;
-  if (saveSched()) toast('Sa\u010duvano \u2713');
-  renderSched();
+  toast('Čuvanje...');
+  function finish(){ editId = null; toast('Sačuvano ✓'); renderSched(); }
+  function addNew(){
+    if (!newRows.length){ finish(); return; }
+    api('POST', 'schedule_slots', newRows, function(ok){
+      if (!ok){ toast('Greška pri čuvanju!'); return; }
+      for (var j = 0; j < newRows.length; j++){
+        var r = newRows[j];
+        allSlots.push({ id: r.id, sid: r.subject_id, name: r.subject_name, year: r.year, day: r.day, start: r.start_time, end: r.end_time, note: r.note });
+      }
+      finish();
+    });
+  }
+  if (edPatch){
+    api('PATCH', 'schedule_slots?user_key=eq.' + enc(user.key) + '&id=eq.' + enc(ed.id), edPatch, function(ok){
+      if (!ok){ toast('Greška pri čuvanju!'); return; }
+      var oldSid = ed.sid;
+      ed.sid = sid; ed.name = sname; ed.day = days[0]; ed.start = st; ed.end = en; ed.note = note;
+      if (oldSid !== sid){
+        for (var k in att) if (att.hasOwnProperty(k) && k.indexOf(ed.id + '|') === 0) att[k].sid = sid;
+        api('PATCH', 'attendance?user_key=eq.' + enc(user.key) + '&slot_id=eq.' + enc(ed.id), { subject_id: sid }, function(){});
+      }
+      addNew();
+    });
+  } else addNew();
 }
 
 function delSlot(id){
-  if (!confirm('Obrisati termin?')) return;
-  var a = yearSlots();
-  for (var i = 0; i < a.length; i++) if (a[i].id === id){ a.splice(i, 1); break; }
-  if (editId === id) editId = null;
-  saveSched();
-  renderSched();
+  if (!confirm('Obrisati termin? Biće obrisano i njegovo evidentirano prisustvo.')) return;
+  api('DELETE', 'schedule_slots?user_key=eq.' + enc(user.key) + '&id=eq.' + enc(id), null, function(ok){
+    if (!ok){ toast('Greška pri brisanju!'); return; }
+    for (var i = 0; i < allSlots.length; i++) if (allSlots[i].id === id){ allSlots.splice(i, 1); break; }
+    for (var k in att) if (att.hasOwnProperty(k) && k.indexOf(id + '|') === 0) delete att[k];
+    if (editId === id) editId = null;
+    renderSched();
+  });
 }
 
 /* ---------- auto login ---------- */
