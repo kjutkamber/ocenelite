@@ -555,6 +555,9 @@ function renderSched(){
     var mx = 0;
     for (var i = 0; i < subjects.length; i++) if (subjects[i].grade !== '' && subjects[i].semester > mx) mx = subjects[i].semester;
     schedYear = mx > 0 ? Math.ceil(mx / 2) : 1;
+    var hasYr = false;
+    for (var q = 0; q < allSlots.length; q++) if (allSlots[q].year === schedYear) hasYr = true;
+    if (!hasYr && allSlots.length) schedYear = allSlots[0].year;
   }
   var yh = '';
   for (var y = 1; y <= 4; y++) yh += '<button class="yr' + (y === schedYear ? ' on' : '') + '" onclick="setSchedYear(' + y + ')">' + y + '. godina</button>';
